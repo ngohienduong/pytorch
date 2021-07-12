@@ -1295,7 +1295,6 @@ class TestQuantizeFx(QuantizationTestCase):
         ]
         self.checkGraphModuleNodes(m, expected_node_list=node_list)
 
-
     def test_qconfig_dict_validity(self):
         r"""
         Verifies that if a user passes an invalid key or makes a typo when
@@ -4480,6 +4479,45 @@ class TestQuantizeFxOps(QuantizationTestCase):
 
 
 class TestQuantizeFxModels(QuantizationTestCase):
+    @skipIfNoFBGEMM
+    @unittest.skipIf(not TEST_CUDA, "gpu is not available.")
+    def test_static_gpu_convert_basic(self):
+
+        class Net(nn.Module):
+            def __init__(self):
+                super(Net, self).__init__()
+                self.relu1 = nn.ReLU()
+                self.conv1 = nn.Conv2d(1, 6, 5)
+                self.linear1 = nn.Linear(120, 1)
+
+            def forward(self, x):
+                x = self.relu1(self.conv1(x))
+                y = self.linear1(x.view(-1))
+                return y
+
+        input = torch.randn((5, 1, 6, 6)).to('cuda')
+        model = Net().to('cuda').eval()
+        qconfig_dict = {"": torch.quantization.get_default_qconfig('fbgemm')}
+        model_prepared = prepare_fx(model, qconfig_dict)
+        model_prepared(input)
+        model_quantized = convert_fx(model_prepared, is_reference=True)
+        out = model_quantized(input)
+        self.assertEqual(out.device.type, 'cuda')
+
+    @skipIfNoFBGEMM
+    @unittest.skipIf(not TEST_CUDA, "gpu is not available.")
+    def test_static_gpu_convert_mobilenet(self):
+        input = torch.randn((5, 3, 6, 6)).to('cuda')
+        import torchvision
+        model = torchvision.models.mobilenet_v2(pretrained=False).to('cuda').eval()
+        qconfig_dict = {"": torch.quantization.get_default_qconfig('fbgemm')}
+        model_prepared = prepare_fx(model, qconfig_dict)
+        model_prepared(input)
+        model_quantized = convert_fx(model_prepared, is_reference=True)
+        out = model_quantized(input)
+        self.assertEqual(out.device.type, 'cuda')
+
+
     def _test_model_impl(
             self, mode, name, model, eager_quantizable_model,
             check_with_eager=True,
@@ -4735,3 +4773,7 @@ class TestQuantizeFxModels(QuantizationTestCase):
         model = models.__dict__[name](pretrained=True).eval().float()
         self._test_model_impl(
             'ddp', 'resnet18', model, eager_quantizable_model)
+
+if __name__ == "__main__":
+    a = TestQuantizeFx()
+    a.test_static_gpu_convert_basic()
